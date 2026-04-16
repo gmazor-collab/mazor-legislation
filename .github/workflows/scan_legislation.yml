@@ -39,8 +39,7 @@ jobs:
           else
             python scan_legislation.py
           fi
-        working-directory: scripts
-
+   
       - name: Commit pending legislation file
         run: |
           git config --local user.email "action@github.com"
