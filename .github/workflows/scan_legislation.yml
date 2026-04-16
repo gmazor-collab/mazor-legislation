@@ -1,0 +1,58 @@
+name: סריקת עדכוני חקיקה שבועית
+
+on:
+  schedule:
+    - cron: '0 5 * * 0'   # כל יום ראשון 08:00 ישראל
+  workflow_dispatch:
+    inputs:
+      scan_type:
+        description: 'סוג סריקה'
+        required: true
+        default: 'weekly'
+        type: choice
+        options:
+          - weekly
+          - full_10_years
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run legislation scan
+        env:
+          CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
+          FORMSPREE_ID:   ${{ secrets.FORMSPREE_ID }}
+          ADMIN_URL:      ${{ secrets.ADMIN_URL }}
+        run: |
+          if [ "${{ github.event.inputs.scan_type }}" = "full_10_years" ]; then
+            python scan_legislation.py --full
+          else
+            python scan_legislation.py
+          fi
+        working-directory: scripts
+
+      - name: Commit pending legislation file
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name  "GitHub Action"
+          git add pending_legislation.json || true
+          git diff --staged --quiet || git commit -m "⚖️ עדכון חקיקה — $(date +'%d/%m/%Y')"
+          git push || true
+
+      - name: Summary
+        run: |
+          if [ -f pending_legislation.json ]; then
+            COUNT=$(python3 -c "import json; d=json.load(open('pending_legislation.json')); print(len([x for x in d if x['status']=='pending']))")
+            echo "### ⚖️ סריקה הושלמה" >> $GITHUB_STEP_SUMMARY
+            echo "פריטים ממתינים: **$COUNT**" >> $GITHUB_STEP_SUMMARY
+          fi
