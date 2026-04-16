@@ -14,11 +14,8 @@ import sys
 import json
 import datetime
 import argparse
-import smtplib
 import urllib.request
-import urllib.error
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
+import urllib.parse
 from pathlib import Path
 
 # ══ הגדרות ══
@@ -46,14 +43,10 @@ def get_claude_key():
         raise ValueError("CLAUDE_API_KEY environment variable not set")
     return key
 
-def get_email_config():
+def get_formspree_config():
     return {
-        "smtp_host":  os.environ.get("SMTP_HOST",  "smtp.gmail.com"),
-        "smtp_port":  int(os.environ.get("SMTP_PORT", "587")),
-        "smtp_user":  os.environ.get("SMTP_USER",  ""),
-        "smtp_pass":  os.environ.get("SMTP_PASS",  ""),
-        "to_email":   os.environ.get("TO_EMAIL",   "office@678.co.il"),
-        "admin_url":  os.environ.get("ADMIN_URL",  "https://678.co.il/admin.html"),
+        "formspree_id": os.environ.get("FORMSPREE_ID", ""),
+        "admin_url":    os.environ.get("ADMIN_URL", "https://678.co.il/admin.html"),
     }
 
 def call_claude(prompt: str, max_tokens: int = 4000) -> str:
@@ -148,61 +141,61 @@ def save_pending(items: list):
     return new_items
 
 def send_email(new_items: list, cfg: dict):
-    if not cfg["smtp_user"] or not cfg["smtp_pass"]:
-        print("⚠️  SMTP credentials not configured — skipping email")
+    """שליחת התראה דרך Formspree — ללא SMTP, ללא סיסמאות."""
+    fid = cfg.get("formspree_id", "")
+    if not fid or fid == "xyzabcde":
+        print("⚠️  FORMSPREE_ID not configured — skipping email")
         return
     if not new_items:
         print("ℹ️  No new items — no email sent")
         return
 
-    subject = f"⚖️ {len(new_items)} עדכוני חקיקה ממתינים לאישורך — משרד מזור"
+    now       = datetime.datetime.now().strftime("%d/%m/%Y")
+    admin_url = cfg.get("admin_url", "https://678.co.il/admin.html")
 
-    # HTML Body
-    items_html = ""
+    # בנה הודעת טקסט עם סיכום
+    lines = [f"עדכוני חקיקה חדשים — {now}", "=" * 40, ""]
     for i, l in enumerate(new_items, 1):
-        items_html += f"""
-        <div style="border:1px solid #e2e0da;border-radius:8px;padding:16px;margin-bottom:12px;background:#fafaf8">
-          <span style="background:rgba(201,168,76,.15);color:#7a5a10;font-size:12px;padding:2px 8px;border-radius:4px;font-weight:600">{l.get('lawType','')}</span>
-          <h3 style="color:#1B2A4A;margin:8px 0 4px;font-size:15px">{l.get('title','')}</h3>
-          <p style="color:#5a6478;font-size:13px;margin:0 0 6px">{l.get('lawName','')} {l.get('effectiveDate','')}</p>
-          <p style="color:#3a3a4e;font-size:13px;margin:0">{l.get('summary','')}</p>
-        </div>"""
+        lines.append(f"{i}. {l.get('lawType','')} | {l.get('lawName','')}")
+        lines.append(f"   {l.get('title','')}")
+        lines.append(f"   {l.get('summary','')}")
+        lines.append("")
+    lines += [
+        "=" * 40,
+        f"לאישור הפרסום כנס ל:",
+        f"{admin_url}#legislation",
+        "",
+        "admin → עדכוני חקיקה → אשר ופרסם"
+    ]
+    message = "\n".join(lines)
 
-    html = f"""<!DOCTYPE html>
-<html dir="rtl" lang="he">
-<head><meta charset="UTF-8"></head>
-<body style="font-family:Arial,sans-serif;direction:rtl;max-width:600px;margin:0 auto;padding:20px;color:#1a1a2e">
-  <div style="background:#1B2A4A;padding:20px 24px;border-radius:10px 10px 0 0">
-    <h1 style="color:white;margin:0;font-size:18px">⚖️ עדכוני חקיקה — משרד מזור</h1>
-    <p style="color:rgba(255,255,255,.7);margin:4px 0 0;font-size:13px">{datetime.datetime.now().strftime('%d/%m/%Y')}</p>
-  </div>
-  <div style="background:white;border:1px solid #e2e0da;border-top:none;padding:20px 24px;border-radius:0 0 10px 10px">
-    <p style="color:#5a6478;font-size:14px">נמצאו <strong style="color:#1B2A4A">{len(new_items)} עדכוני חקיקה</strong> הממתינים לאישורך לפני פרסום:</p>
-    {items_html}
-    <div style="text-align:center;margin-top:20px">
-      <a href="{cfg['admin_url']}#legislation"
-         style="background:#C9A84C;color:#1B2A4A;padding:12px 28px;border-radius:6px;text-decoration:none;font-weight:700;font-size:15px;display:inline-block">
-        ✅ כנס לאישור הפרסום ←
-      </a>
-    </div>
-    <p style="color:#8a8a99;font-size:11px;margin-top:16px;text-align:center">
-      כנס לאדמין → עדכוני חקיקה → לחץ "אשר ופרסם" על כל פריט שברצונך לפרסם.
-    </p>
-  </div>
-</body>
-</html>"""
+    subject = f"עדכוני חקיקה: {len(new_items)} פריטים ממתינים לאישורך"
 
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-    msg["From"]    = cfg["smtp_user"]
-    msg["To"]      = cfg["to_email"]
-    msg.attach(MIMEText(html, "html", "utf-8"))
+    # POST ל-Formspree
+    data = urllib.parse.urlencode({
+        "_subject": subject,
+        "message":  message,
+        "source":   "GitHub Actions — סריקת חקיקה",
+    }).encode("utf-8")
 
-    with smtplib.SMTP(cfg["smtp_host"], cfg["smtp_port"]) as server:
-        server.starttls()
-        server.login(cfg["smtp_user"], cfg["smtp_pass"])
-        server.sendmail(cfg["smtp_user"], cfg["to_email"], msg.as_string())
-    print(f"✅ Email sent to {cfg['to_email']}")
+    req = urllib.request.Request(
+        f"https://formspree.io/f/{fid}",
+        data=data,
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Accept":       "application/json",
+        },
+        method="POST"
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            result = json.loads(resp.read())
+            if result.get("ok"):
+                print(f"✅ Email sent via Formspree")
+            else:
+                print(f"⚠️  Formspree response: {result}")
+    except Exception as e:
+        print(f"⚠️  Email failed: {e}")
 
 def main():
     parser = argparse.ArgumentParser(description="סריקת עדכוני חקיקה")
@@ -246,7 +239,7 @@ def main():
     print(f"📄 קובץ: {OUTPUT_FILE}")
 
     if new_items:
-        cfg = get_email_config()
+        cfg = get_formspree_config()
         try:
             send_email(new_items, cfg)
         except Exception as e:

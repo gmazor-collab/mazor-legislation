@@ -1,11 +1,8 @@
 name: סריקת עדכוני חקיקה שבועית
 
 on:
-  # הרצה שבועית — כל יום ראשון בשעה 08:00 ישראל (05:00 UTC)
   schedule:
-    - cron: '0 5 * * 0'
-
-  # הפעלה ידנית מ-GitHub
+    - cron: '0 5 * * 0'   # כל יום ראשון 08:00 ישראל
   workflow_dispatch:
     inputs:
       scan_type:
@@ -34,17 +31,13 @@ jobs:
       - name: Run legislation scan
         env:
           CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
-          SMTP_HOST:      ${{ secrets.SMTP_HOST }}
-          SMTP_PORT:      ${{ secrets.SMTP_PORT }}
-          SMTP_USER:      ${{ secrets.SMTP_USER }}
-          SMTP_PASS:      ${{ secrets.SMTP_PASS }}
-          TO_EMAIL:       ${{ secrets.TO_EMAIL }}
+          FORMSPREE_ID:   ${{ secrets.FORMSPREE_ID }}
           ADMIN_URL:      ${{ secrets.ADMIN_URL }}
         run: |
           if [ "${{ github.event.inputs.scan_type }}" = "full_10_years" ]; then
-            python scripts/scan_legislation.py --full
+            python scan_legislation.py --full
           else
-            python scripts/scan_legislation.py
+            python scan_legislation.py
           fi
         working-directory: scripts
 
@@ -53,14 +46,13 @@ jobs:
           git config --local user.email "action@github.com"
           git config --local user.name  "GitHub Action"
           git add pending_legislation.json || true
-          git diff --staged --quiet || git commit -m "⚖️ עדכון פריטי חקיקה ממתינים — $(date +'%d/%m/%Y')"
+          git diff --staged --quiet || git commit -m "⚖️ עדכון חקיקה — $(date +'%d/%m/%Y')"
           git push || true
 
       - name: Summary
         run: |
           if [ -f pending_legislation.json ]; then
-            COUNT=$(python3 -c "import json; data=json.load(open('pending_legislation.json')); print(len([x for x in data if x['status']=='pending']))")
-            echo "## ⚖️ סריקת חקיקה הושלמה" >> $GITHUB_STEP_SUMMARY
-            echo "פריטים ממתינים לאישור: **$COUNT**" >> $GITHUB_STEP_SUMMARY
-            echo "לאישור כנס ל: ${{ secrets.ADMIN_URL }}#legislation" >> $GITHUB_STEP_SUMMARY
+            COUNT=$(python3 -c "import json; d=json.load(open('pending_legislation.json')); print(len([x for x in d if x['status']=='pending']))")
+            echo "### ⚖️ סריקה הושלמה" >> $GITHUB_STEP_SUMMARY
+            echo "פריטים ממתינים: **$COUNT**" >> $GITHUB_STEP_SUMMARY
           fi
