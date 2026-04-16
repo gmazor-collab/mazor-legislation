@@ -20,6 +20,7 @@ LAWS = [
 ]
 
 def call_claude(prompt: str) -> str:
+    subprocess.run([sys.executable, "-m", "pip", "install", "anthropic", "-q"], check=True)
     import anthropic
     client = anthropic.Anthropic(api_key=os.environ["CLAUDE_API_KEY"])
     msg = client.messages.create(
