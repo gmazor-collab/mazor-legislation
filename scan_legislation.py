@@ -1,163 +1,89 @@
 #!/usr/bin/env python3
 """
-סקריפט סריקת חקיקה — משרד עו"ד גיל מזור
-מריץ Claude API לזיהוי שינויי חקיקה במקרקעין
-שולח מייל לאישור לפני פרסום
-
-הרצה: python scan_legislation.py [--full] [--year YYYY]
-  --full       סרוק 10 שנים אחרונות (הרצה ראשונה)
-  --year YYYY  סרוק שנה ספציפית
+סריקת עדכוני חקיקה — משרד עו"ד גיל מזור
 """
-
-import os
-import sys
-import json
-import datetime
-import argparse
-import urllib.request
-import urllib.parse
+import os, sys, json, datetime, argparse, re, urllib.request, urllib.parse
 from pathlib import Path
 
-# ══ הגדרות ══
-CLAUDE_MODEL   = "claude-sonnet-4-20250514"
-CLAUDE_API_URL = "https://api.anthropic.com/v1/messages"
-OUTPUT_FILE    = Path(__file__).parent.parent / "pending_legislation.json"
+OUTPUT_FILE = Path(__file__).parent.parent / "pending_legislation.json"
 
 LAWS = [
-    "חוק המקרקעין, תשכ\"ט-1969",
-    "חוק המכר (דירות), תשל\"ג-1973",
-    "חוק בתי משותפים (חלק ו' לחוק המקרקעין)",
-    "חוק הגנת הדייר, תשל\"ב-1972",
-    "חוק שכירות ושאילה, תשל\"א-1971",
-    "חוק פינוי ובינוי, תשס\"ו-2006",
-    "חוק התכנון והבניה, תשכ\"ה-1965",
-    "חוק מס שבח מקרקעין, תשכ\"ג-1963",
-    "חוק חוזים (חלק כללי), תשל\"ג-1973",
-    "תקנות המקרקעין (ניהול ורישום), תש\"ל-1969",
-    "חוק עסקאות מקרקעין (קידום רישום), תשע\"ב-2011",
+    'חוק המקרקעין, תשכ"ט-1969',
+    'חוק המכר (דירות), תשל"ג-1973',
+    'חוק בתי משותפים (חלק ו\' לחוק המקרקעין)',
+    'חוק הגנת הדייר, תשל"ב-1972',
+    'חוק שכירות ושאילה, תשל"א-1971',
+    'חוק פינוי ובינוי, תשס"ו-2006',
+    'חוק התכנון והבניה, תשכ"ה-1965',
+    'חוק מס שבח מקרקעין, תשכ"ג-1963',
+    'חוק חוזים (חלק כללי), תשל"ג-1973',
 ]
 
-def get_claude_key():
-    key = os.environ.get("CLAUDE_API_KEY", "")
-    if not key:
-        raise ValueError("CLAUDE_API_KEY environment variable not set")
-    return key
-
-def get_formspree_config():
-    return {
-        "formspree_id": os.environ.get("FORMSPREE_ID", ""),
-        "admin_url":    os.environ.get("ADMIN_URL", "https://678.co.il/admin.html"),
-    }
-
-def call_claude(prompt: str, max_tokens: int = 4000) -> str:
-    key = get_claude_key()
-    payload = json.dumps({
-        "model": CLAUDE_MODEL,
-        "max_tokens": max_tokens,
-        "messages": [{"role": "user", "content": prompt}]
-    }).encode("utf-8")
-    req = urllib.request.Request(
-        CLAUDE_API_URL,
-        data=payload,
-        headers={
-            "Content-Type": "application/json",
-            "x-api-key": key,
-            "anthropic-version": "2023-06-01",
-        },
-        method="POST"
+def call_claude(prompt: str) -> str:
+    import anthropic
+    client = anthropic.Anthropic(api_key=os.environ["CLAUDE_API_KEY"])
+    msg = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=3000,
+        messages=[{"role": "user", "content": prompt}]
     )
-    with urllib.request.urlopen(req, timeout=120) as resp:
-        data = json.loads(resp.read())
-    return data["content"][0]["text"]
+    return msg.content[0].text
 
-def build_prompt(period_desc: str, years_range: str) -> str:
-    laws_list = "\n".join(f"{i+1}. {law}" for i, law in enumerate(LAWS))
-    return f"""אתה עוזר משפטי ישראלי לעורך דין המתמחה במקרקעין.
+def build_prompt(period: str) -> str:
+    laws = "\n".join(f"- {l}" for l in LAWS)
+    return f"""אתה עוזר משפטי ישראלי לעורך דין מקרקעין.
 
-עליך לסקור שינויי חקיקה ישראלית רלוונטיים מהתקופה: {period_desc}.
+סרוק שינויי חקיקה רלוונטיים מהתקופה: {period}
 
-חוקים לסריקה:
-{laws_list}
+חוקים לבדיקה:
+{laws}
 
-הנחיות:
-- כלול תיקוני חוק, תקנות חדשות, צווים, הוראות שעה ופסיקה מנחה של בית המשפט העליון.
-- התמקד בשינויים מהותיים הנוגעים לזכויות רוכשי דירות, בעלי נכסים, שוכרים ובתים משותפים.
-- אם {period_desc} כולל עשר שנים — בחר 8-12 שינויים משמעותיים ביותר.
-- אם {period_desc} הוא שבוע אחד — כלול הכל, גם אם אין שינויים (ציין אז מערך ריק []).
-
-עבור כל פריט, ספק מידע מדויק ועדכני. אם אינך בטוח בתאריך מדויק — ציין שנה בלבד.
-
-עבור כל פריט כתוב בדיוק בפורמט הבא (חזור על הבלוק לכל פריט):
+כתוב עד 5 שינויים משמעותיים ביותר.
+עבור כל שינוי:
 
 <ITEM>
-<TYPE>סוג החקיקה (תיקון חוק / חוק חדש / תקנות / צו)</TYPE>
-<LAW>שם החוק המלא</LAW>
-<DATE>תאריך/שנת כניסה לתוקף</DATE>
-<TITLE>כותרת קליטה לאזרח — מה זה אומר עליו (עד 70 תווים)</TITLE>
-<SUMMARY>תקציר בשני משפטים קצרים</SUMMARY>
+<TYPE>סוג (תיקון חוק / חוק חדש / תקנות)</TYPE>
+<LAW>שם החוק</LAW>
+<DATE>שנה</DATE>
+<TITLE>כותרת קצרה לאזרח (עד 60 תווים)</TITLE>
+<SUMMARY>תקציר קצר — שני משפטים</SUMMARY>
 <BODY>
 ## מה השתנה?
-הסבר מפורט (6-8 משפטים)
+3-4 משפטים.
 
 ## מה המשמעות עבורך?
-השפעה מעשית על בעלי נכסים / רוכשים / שוכרים (6-8 משפטים)
-
-## מה כדאי לדעת?
-טיפים ואזהרות (4-5 משפטים)
+3-4 משפטים.
 </BODY>
 </ITEM>
 
-כתוב את כל הפריטים ברצף ללא שום טקסט נוסף לפני או אחרי."""
+ללא טקסט נוסף לפני או אחרי."""
 
-def parse_claude_response(raw: str) -> list:
-    import re
-    raw = raw.strip()
-
-    def get_tag(text, tag):
-        m = re.search(f'<{tag}>(.*?)</{tag}>', text, re.DOTALL)
+def parse_response(raw: str) -> list:
+    def tag(text, t):
+        m = re.search(f'<{t}>(.*?)</{t}>', text, re.DOTALL)
         return m.group(1).strip() if m else ""
-
-    # פענוח תגיות XML
-    items_raw = re.findall(r'<ITEM>(.*?)</ITEM>', raw, re.DOTALL)
-    if items_raw:
-        result = []
-        for item_text in items_raw:
-            item = {
-                "lawType":       get_tag(item_text, "TYPE"),
-                "lawName":       get_tag(item_text, "LAW"),
-                "effectiveDate": get_tag(item_text, "DATE"),
-                "title":         get_tag(item_text, "TITLE"),
-                "summary":       get_tag(item_text, "SUMMARY"),
-                "body":          get_tag(item_text, "BODY"),
-            }
-            if item["title"] or item["lawName"]:
-                result.append(item)
-        return result
-
-    # fallback: JSON
-    raw_clean = raw.replace("```json", "").replace("```", "").strip()
-    try:
-        return json.loads(raw_clean)
-    except Exception:
-        match = re.search(r'\[[\s\S]*\]', raw_clean)
-        if match:
-            try:
-                return json.loads(match.group(0))
-            except Exception:
-                pass
-    return []
+    items = []
+    for block in re.findall(r'<ITEM>(.*?)</ITEM>', raw, re.DOTALL):
+        item = {
+            "lawType":       tag(block, "TYPE"),
+            "lawName":       tag(block, "LAW"),
+            "effectiveDate": tag(block, "DATE"),
+            "title":         tag(block, "TITLE"),
+            "summary":       tag(block, "SUMMARY"),
+            "body":          tag(block, "BODY"),
+        }
+        if item["title"] or item["lawName"]:
+            items.append(item)
+    return items
 
 def load_existing() -> list:
-    if OUTPUT_FILE.exists():
-        try:
-            return json.loads(OUTPUT_FILE.read_text(encoding="utf-8"))
-        except Exception:
-            return []
-    return []
+    try:
+        return json.loads(OUTPUT_FILE.read_text(encoding="utf-8")) if OUTPUT_FILE.exists() else []
+    except:
+        return []
 
-def save_pending(items: list):
+def save_pending(items: list) -> list:
     existing = load_existing()
-    # הוסף רק פריטים חדשים (לפי כותרת + שם חוק)
     existing_keys = {(e.get("lawName",""), e.get("title","")) for e in existing}
     new_items = []
     for item in items:
@@ -168,117 +94,65 @@ def save_pending(items: list):
             item["createdAt"] = datetime.datetime.now().isoformat()
             new_items.append(item)
             existing_keys.add(key)
-    all_items = existing + new_items
-    OUTPUT_FILE.write_text(json.dumps(all_items, ensure_ascii=False, indent=2), encoding="utf-8")
+    OUTPUT_FILE.write_text(json.dumps(existing + new_items, ensure_ascii=False, indent=2), encoding="utf-8")
     return new_items
 
-def send_email(new_items: list, cfg: dict):
-    """שליחת התראה דרך Formspree — ללא SMTP, ללא סיסמאות."""
-    fid = cfg.get("formspree_id", "")
-    if not fid or fid == "xyzabcde":
-        print("⚠️  FORMSPREE_ID not configured — skipping email")
+def send_notification(items: list):
+    fid = os.environ.get("FORMSPREE_ID","")
+    if not fid or fid == "xyzabcde" or not items:
+        print("⚠️  דילוג על שליחת מייל (Formspree לא מוגדר)")
         return
-    if not new_items:
-        print("ℹ️  No new items — no email sent")
-        return
-
-    now       = datetime.datetime.now().strftime("%d/%m/%Y")
-    admin_url = cfg.get("admin_url", "https://678.co.il/admin.html")
-
-    # בנה הודעת טקסט עם סיכום
-    lines = [f"עדכוני חקיקה חדשים — {now}", "=" * 40, ""]
-    for i, l in enumerate(new_items, 1):
+    admin_url = os.environ.get("ADMIN_URL","https://678.co.il/admin.html")
+    lines = [f"עדכוני חקיקה — {datetime.datetime.now().strftime('%d/%m/%Y')}", ""]
+    for i,l in enumerate(items,1):
         lines.append(f"{i}. {l.get('lawType','')} | {l.get('lawName','')}")
         lines.append(f"   {l.get('title','')}")
         lines.append(f"   {l.get('summary','')}")
         lines.append("")
-    lines += [
-        "=" * 40,
-        f"לאישור הפרסום כנס ל:",
-        f"{admin_url}#legislation",
-        "",
-        "admin → עדכוני חקיקה → אשר ופרסם"
-    ]
-    message = "\n".join(lines)
-
-    subject = f"עדכוני חקיקה: {len(new_items)} פריטים ממתינים לאישורך"
-
-    # POST ל-Formspree
+    lines.append(f"לאישור: {admin_url}#legislation")
     data = urllib.parse.urlencode({
-        "_subject": subject,
-        "message":  message,
-        "source":   "GitHub Actions — סריקת חקיקה",
+        "_subject": f"עדכוני חקיקה: {len(items)} פריטים ממתינים",
+        "message":  "\n".join(lines),
+        "source":   "GitHub Actions",
     }).encode("utf-8")
-
-    req = urllib.request.Request(
-        f"https://formspree.io/f/{fid}",
-        data=data,
-        headers={
-            "Content-Type": "application/x-www-form-urlencoded",
-            "Accept":       "application/json",
-        },
-        method="POST"
-    )
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            result = json.loads(resp.read())
-            if result.get("ok"):
-                print(f"✅ Email sent via Formspree")
-            else:
-                print(f"⚠️  Formspree response: {result}")
+        req = urllib.request.Request(
+            f"https://formspree.io/f/{fid}", data=data,
+            headers={"Content-Type":"application/x-www-form-urlencoded","Accept":"application/json"},
+            method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=30) as r:
+            result = json.loads(r.read())
+            print("✅ מייל נשלח" if result.get("ok") else f"⚠️ Formspree: {result}")
     except Exception as e:
-        print(f"⚠️  Email failed: {e}")
+        print(f"⚠️ שגיאת מייל: {e}")
 
 def main():
-    parser = argparse.ArgumentParser(description="סריקת עדכוני חקיקה")
-    parser.add_argument("--full",  action="store_true", help="סרוק 10 שנים אחרונות")
-    parser.add_argument("--year",  type=int, help="סרוק שנה ספציפית")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--full", action="store_true", help="סרוק 3 שנים אחרונות")
     args = parser.parse_args()
 
-    now   = datetime.datetime.now()
-    year  = args.year or now.year
-
+    now = datetime.datetime.now()
     if args.full:
-        from_year = now.year - 10
-        period    = f"2014 עד {now.year}"
-        years_range = f"{from_year}-{now.year}"
-    elif args.year:
-        period    = f"שנת {args.year}"
-        years_range = str(args.year)
+        period = f"{now.year - 3} עד {now.year}"
     else:
-        # ברירת מחדל: שבוע אחרון
-        week_ago  = now - datetime.timedelta(days=7)
-        period    = f"{week_ago.strftime('%d/%m/%Y')} עד {now.strftime('%d/%m/%Y')}"
-        years_range = str(now.year)
+        week_ago = now - datetime.timedelta(days=7)
+        period   = f"{week_ago.strftime('%d/%m/%Y')} עד {now.strftime('%d/%m/%Y')}"
 
-    print(f"🔍 סורק חקיקה עבור: {period}")
-    print(f"📋 חוקים לבדיקה: {len(LAWS)}")
-
-    prompt = build_prompt(period, years_range)
-
+    print(f"🔍 סורק: {period}")
+    prompt = build_prompt(period)
     print("⏳ שולח לניתוח AI...")
-    raw = call_claude(prompt, max_tokens=8000)
-
-    items = parse_claude_response(raw)
+    raw   = call_claude(prompt)
+    items = parse_response(raw)
     print(f"📦 נמצאו {len(items)} עדכונים")
-
     if not items:
-        print("ℹ️  לא נמצאו עדכוני חקיקה לתקופה זו")
+        print("ℹ️  לא נמצאו עדכונים")
         return
-
     new_items = save_pending(items)
-    print(f"💾 נשמרו {len(new_items)} פריטים חדשים (מתוך {len(items)})")
-    print(f"📄 קובץ: {OUTPUT_FILE}")
-
+    print(f"💾 נשמרו {len(new_items)} פריטים חדשים")
     if new_items:
-        cfg = get_formspree_config()
-        try:
-            send_email(new_items, cfg)
-        except Exception as e:
-            print(f"⚠️  Email failed: {e}")
-            print("   (הפריטים נשמרו ב-pending_legislation.json)")
-
-    print("✅ סריקה הושלמה")
+        send_notification(new_items)
+    print("✅ הושלם")
 
 if __name__ == "__main__":
     main()
