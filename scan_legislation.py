@@ -87,33 +87,65 @@ def build_prompt(period_desc: str, years_range: str) -> str:
 
 עבור כל פריט, ספק מידע מדויק ועדכני. אם אינך בטוח בתאריך מדויק — ציין שנה בלבד.
 
-פלט JSON בלבד, ללא שום טקסט לפני או אחרי:
-[
-  {{
-    "lawType": "תיקון חוק",
-    "lawName": "שם החוק המלא כולל שנה",
-    "amendmentNumber": "תיקון מס' XX (אם רלוונטי)",
-    "effectiveDate": "תאריך כניסה לתוקף או שנה משוערת",
-    "title": "כותרת קליטה לאזרח — מה זה אומר עליו (עד 70 תווים)",
-    "summary": "תקציר בשני משפטים קצרים",
-    "body": "## מה השתנה?\\nהסבר מפורט של השינוי (6-8 משפטים)\\n\\n## מה המשמעות עבורך?\\nהשפעה מעשית על בעלי נכסים / רוכשים / שוכרים (6-8 משפטים)\\n\\n## מה כדאי לדעת?\\nטיפים ואזהרות (4-5 משפטים)",
-    "keywords": ["מקרקעין", "רכישה"]
-  }}
-]"""
+עבור כל פריט כתוב בדיוק בפורמט הבא (חזור על הבלוק לכל פריט):
+
+<ITEM>
+<TYPE>סוג החקיקה (תיקון חוק / חוק חדש / תקנות / צו)</TYPE>
+<LAW>שם החוק המלא</LAW>
+<DATE>תאריך/שנת כניסה לתוקף</DATE>
+<TITLE>כותרת קליטה לאזרח — מה זה אומר עליו (עד 70 תווים)</TITLE>
+<SUMMARY>תקציר בשני משפטים קצרים</SUMMARY>
+<BODY>
+## מה השתנה?
+הסבר מפורט (6-8 משפטים)
+
+## מה המשמעות עבורך?
+השפעה מעשית על בעלי נכסים / רוכשים / שוכרים (6-8 משפטים)
+
+## מה כדאי לדעת?
+טיפים ואזהרות (4-5 משפטים)
+</BODY>
+</ITEM>
+
+כתוב את כל הפריטים ברצף ללא שום טקסט נוסף לפני או אחרי."""
 
 def parse_claude_response(raw: str) -> list:
+    import re
     raw = raw.strip()
-    # הסרת markdown wrappers
-    raw = raw.replace("```json", "").replace("```", "").strip()
+
+    def get_tag(text, tag):
+        m = re.search(f'<{tag}>(.*?)</{tag}>', text, re.DOTALL)
+        return m.group(1).strip() if m else ""
+
+    # פענוח תגיות XML
+    items_raw = re.findall(r'<ITEM>(.*?)</ITEM>', raw, re.DOTALL)
+    if items_raw:
+        result = []
+        for item_text in items_raw:
+            item = {
+                "lawType":       get_tag(item_text, "TYPE"),
+                "lawName":       get_tag(item_text, "LAW"),
+                "effectiveDate": get_tag(item_text, "DATE"),
+                "title":         get_tag(item_text, "TITLE"),
+                "summary":       get_tag(item_text, "SUMMARY"),
+                "body":          get_tag(item_text, "BODY"),
+            }
+            if item["title"] or item["lawName"]:
+                result.append(item)
+        return result
+
+    # fallback: JSON
+    raw_clean = raw.replace("```json", "").replace("```", "").strip()
     try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        # ניסיון לחלץ מערך JSON
-        import re
-        match = re.search(r'\[[\s\S]*\]', raw)
+        return json.loads(raw_clean)
+    except Exception:
+        match = re.search(r'\[[\s\S]*\]', raw_clean)
         if match:
-            return json.loads(match.group(0))
-        return []
+            try:
+                return json.loads(match.group(0))
+            except Exception:
+                pass
+    return []
 
 def load_existing() -> list:
     if OUTPUT_FILE.exists():
@@ -225,7 +257,7 @@ def main():
     prompt = build_prompt(period, years_range)
 
     print("⏳ שולח לניתוח AI...")
-    raw = call_claude(prompt, max_tokens=5000)
+    raw = call_claude(prompt, max_tokens=8000)
 
     items = parse_claude_response(raw)
     print(f"📦 נמצאו {len(items)} עדכונים")
