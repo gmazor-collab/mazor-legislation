@@ -2,7 +2,7 @@
 """
 סריקת עדכוני חקיקה — משרד עו"ד גיל מזור
 """
-import os, sys, json, datetime, argparse, re, urllib.request, urllib.parse, subprocess
+import os, sys, json, datetime, argparse, re, urllib.request, urllib.parse
 from pathlib import Path
 
 OUTPUT_FILE = Path(__file__).parent.parent / "pending_legislation.json"
@@ -14,46 +14,56 @@ LAWS = [
     'חוק הגנת הדייר, תשל"ב-1972',
     'חוק שכירות ושאילה, תשל"א-1971',
     'חוק פינוי ובינוי, תשס"ו-2006',
-    'חוק התכנון והבניה, תשכ"ה-1965',
     'חוק מס שבח מקרקעין, תשכ"ג-1963',
     'חוק חוזים (חלק כללי), תשל"ג-1973',
 ]
 
 def call_claude(prompt: str) -> str:
-    subprocess.run([sys.executable, "-m", "pip", "install", "anthropic", "-q"], check=True)
     import anthropic
     client = anthropic.Anthropic(api_key=os.environ["CLAUDE_API_KEY"])
     msg = client.messages.create(
         model="claude-sonnet-4-20250514",
-        max_tokens=3000,
+        max_tokens=5000,
         messages=[{"role": "user", "content": prompt}]
     )
     return msg.content[0].text
 
 def build_prompt(period: str) -> str:
     laws = "\n".join(f"- {l}" for l in LAWS)
-    return f"""אתה עוזר משפטי ישראלי לעורך דין מקרקעין.
+    return f"""אתה עוזר משפטי ישראלי בכיר לעורך דין המתמחה במקרקעין וחוזים.
 
 סרוק שינויי חקיקה רלוונטיים מהתקופה: {period}
 
-חוקים לבדיקה:
+חוקים לסריקה (בלבד):
 {laws}
 
 כתוב עד 5 שינויים משמעותיים ביותר.
-עבור כל שינוי:
+עבור כל שינוי ספק מידע מדויק ומפורט:
 
 <ITEM>
-<TYPE>סוג (תיקון חוק / חוק חדש / תקנות)</TYPE>
-<LAW>שם החוק</LAW>
-<DATE>שנה</DATE>
-<TITLE>כותרת קצרה לאזרח (עד 60 תווים)</TITLE>
-<SUMMARY>תקציר קצר — שני משפטים</SUMMARY>
+<TYPE>סוג (תיקון חוק / חוק חדש / תקנות / צו)</TYPE>
+<LAW>שם החוק המלא כולל שנת החקיקה המקורית</LAW>
+<AMENDMENT>מספר התיקון וסוגו, לדוגמה: תיקון מס' 7, ס"ח XXXX</AMENDMENT>
+<DATE>תאריך פרסום ברשומות ותאריך כניסה לתוקף</DATE>
+<LINK>קישור לרשומות הרשמיות (nevo.co.il או fs.knesset.gov.il) — אם ידוע</LINK>
+<SECTION>מספר הסעיף/ים שהשתנו או נוספו, לדוגמה: סעיף 6א, סעיף 11(ב)</SECTION>
+<TITLE>כותרת קליטה לאזרח — מה זה אומר עליו (עד 65 תווים)</TITLE>
+<SUMMARY>תקציר בשני משפטים</SUMMARY>
 <BODY>
-## מה השתנה?
-3-4 משפטים.
+## המצב הקודם (לפני התיקון)
+תאר את המצב המשפטי שהיה קיים לפני השינוי — מה היה הדין, מה היו הזכויות/חובות. 4-5 משפטים.
 
-## מה המשמעות עבורך?
-3-4 משפטים.
+## מה השתנה
+ציין את מספר הסעיף המדויק שתוקן/נוסף.
+ציטוט מדויק (או קרוב ככל האפשר) של נוסח הסעיף החדש/המתוקן.
+הסבר מה בדיוק השתנה — האם נוסף סעיף חדש, הוחלפה הוראה, בוטלה הגבלה וכו'. 4-5 משפטים.
+
+## המשמעות המעשית
+ניתוח השוואתי: מה הדין היה לפני ← מה הדין עכשיו.
+מה ההשלכות על בעלי נכסים / רוכשי דירות / שוכרים / בתים משותפים. 5-6 משפטים.
+
+## מה כדאי לדעת
+אזהרות, מקרים שדורשים תשומת לב, המלצות פרקטיות. 3-4 משפטים.
 </BODY>
 </ITEM>
 
@@ -68,7 +78,10 @@ def parse_response(raw: str) -> list:
         item = {
             "lawType":       tag(block, "TYPE"),
             "lawName":       tag(block, "LAW"),
+            "amendment":     tag(block, "AMENDMENT"),
             "effectiveDate": tag(block, "DATE"),
+            "link":          tag(block, "LINK"),
+            "section":       tag(block, "SECTION"),
             "title":         tag(block, "TITLE"),
             "summary":       tag(block, "SUMMARY"),
             "body":          tag(block, "BODY"),
