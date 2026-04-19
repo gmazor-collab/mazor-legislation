@@ -2,7 +2,7 @@
 """
 סריקת עדכוני חקיקה — משרד עו"ד גיל מזור
 """
-import os, sys, json, datetime, argparse, re, urllib.request, urllib.parse
+import os, sys, json, datetime, argparse, re, urllib.request, urllib.parse, subprocess
 from pathlib import Path
 
 OUTPUT_FILE = Path(__file__).parent.parent / "pending_legislation.json"
